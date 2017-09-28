@@ -108,9 +108,7 @@ cor.matrix.to.csv <- function(cor.matrix, snp, path) {
 ##
 ## Returns a matrix with the summary statistics of the model for every gene.
 ##
-interaction.regression <- function(cor.matrix, eqtl.gene, snp.name) {
-  
-  snp <- as.numeric(get.snp(snp.name))
+interaction.regression <- function(cor.matrix, eqtl.gene, snp) {
   
   cor.statistics <- do.call("rbind", apply(cor.matrix, 1, function(x) {
     model <- lm(formula = x~snp, weights = sqrt(cell.counts))
@@ -120,6 +118,8 @@ interaction.regression <- function(cor.matrix, eqtl.gene, snp.name) {
   
   return(cor.statistics)
 }
+
+do.permurations <- function(cor.matrix, eqtl.file, exp.matrices, output.dir)
 
 ##
 ## Plots the interaction effect of the genotype on the co-expression of the given genes
@@ -163,12 +163,47 @@ plot.correlations.qtl <- function(gene.1, gene.2, snp.id, exp.matrices, xlim = N
 ##
 ## Returns a matrix with the linear model r-squared for every gene (rows) per eQTL gene (columns)
 ##
-create.inter.matrix <- function(eqtl.file, exp.matrices , sig.thresh = 0.05, output.dir) {
+create.inter.matrix <- function(eqtl.file, exp.matrices, output.dir, permutations = F, n.perm = 10) {
+  
+  if (permutations) {
+    perm.sample.orders <- c()
+    for (i in 1:n.perm) {
+      perm.sample.orders[i] <- sample(1:length(exp.matrices), length(exp.matrices), replace = F)
+    }
+  }
+  
+  r.squared.matrix <- NULL
+  
+  r.permuted <- list(rep(NULL, n.perm))
+  p.value.permuted <- list(rep(NULL, n.perm))
+  
+  for (i in 1:nrow(eqtl.file)) {
+    eqtl <- eqtl.file[i,]
+    cor.matrix <- create.cor.matrix(exp.matrices = exp.matrices, gene.name = eqtl["ProbeName"])
+    
+    snp <- as.numeric(get.snp(eqtl["SNPName"]))
+    interaction.statistics <- interaction.regression(cor.matrix = cor.matrix, eqtl.gene = eqtl["ProbeName"], snp = snp)
+    r.squared.matrix <- cbind(r.squared.matrix, interaction.statistics)
+    if (permutations) {
+      for (current.perm in 1:n.perm) {
+        permutated.snp <- snp[perm.sample.orders[current.perm]]
+        perm.interaction.statistics <- interaction.regression(cor.matrix = cor.matrix, eqtl.gene = eqtl["ProbeName"], snp = snp)
+        r <- perm.interaction.statistics$statistic / sqrt(length(snp) -2 + perm.interaction.statistics$statistic ** 2)
+        r.permuted[[current.perm]] <- cbind(r.permuted[[current.perm]], r)
+        p.value.permuted[[current.perm]] <- cbind(p.value.permuted[[current.perm]], perm.interaction.statistics$p.value)
+        
+      }
+      
+    }
+  }
   
   r.squared.list <- pbapply(eqtl.file, 1, function(eqtl) {
+    snp <- as.numeric(get.snp(eqtl["SNPName"]))
     
     cor.matrix <- create.cor.matrix(exp.matrices = exp.matrices, gene.name = eqtl["ProbeName"])
-    interaction.statistics <- interaction.regression(cor.matrix = cor.matrix, eqtl.gene = eqtl["ProbeName"], snp.name = eqtl["SNPName"])
+    interaction.statistics <- interaction.regression(cor.matrix = cor.matrix, eqtl.gene = eqtl["ProbeName"], snp = snp )
+    
+    
     
     return(data.frame(r.squard = interaction.statistics$r.squared, row.names = rownames(cor.matrix)))
   })
@@ -176,6 +211,8 @@ create.inter.matrix <- function(eqtl.file, exp.matrices , sig.thresh = 0.05, out
   #colnames(r.squared.list) <- eqtl.file$ProbeName
   return(r.squared.list)
 }
+
+
 
 ##
 ## Plots all the significant interations effects of the eQTLs in an eQTL file.
@@ -211,8 +248,12 @@ plot.interactions.eqtl <- function(eqtl.file, exp.matrices , sig.thresh = 0.05, 
 }
 
 r.squared.list <- plot.interactions.eqtl(th.eqtls, samples, output.dir = "")
-r.squared.list
-r.squared.table <- do.call("cbind")
+r.squared.table <- do.call("cbind", r.squared.list)
+colnames(r.squared.table) <- th.eqtls$ProbeName
 
+r.squared.table[is.na(r.squared.table)] <- 0
+length(which(as.numeric(as.matrix(r.squared.table)) == 0))
 
+write.table(r.squared.table, file = "~/Desktop/interactions/interaction_table_t_cd4_eqtls_with_NA.tsv", sep = "\t",  quote = F, col.names = NA)
+hist(apply(r.squared.table, 2, max), 100)
 
